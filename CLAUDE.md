@@ -70,6 +70,44 @@ Env vars (see `.env.example`): `E2E_API_URL`, `E2E_FE_URL`, `E2E_ADMIN_URL`,
 - `tests/*.spec.ts` -- one file per flow: `auth`, `create-request-public`, `create-request-direct`,
   `job-board-interest`, `review-moderation`, `whatsapp-followup`.
 
+## Writing a new spec — real gotchas, not guesses
+
+Every one of these cost a real debugging round (run → read the failure → fix → rerun) the first
+time; skip that round next time.
+
+- **No `data-testid` anywhere** in specialist-fe or specialist-admin. Don't guess selector text
+  from memory, docs, or "what it probably says" — write the spec, run it against the real stack,
+  and when it fails, read `test-results/<test-name>/error-context.md` (the accessibility snapshot
+  Playwright captures on failure) or the attached screenshot for the *actual* button text/roles.
+  Concrete traps already hit: the review button is "Dejar mi reseña", not "Dejar reseña"; the
+  star-rating widget is 5 plain unnamed `<button>`s, not `role="radio"`; the "force follow-up"
+  admin panel's rule picker is a bare `<select>` with no label association.
+- **Freshly-created requests don't show up where you'd expect.** The client dashboard
+  (`/client/dashboard`) groups requests into tabs ("Te toca a vos" / "Esperando a la otra parte" /
+  "Cerrados") — a brand-new request (nobody's acted on it yet) lands under "Esperando a la otra
+  parte", not the default-selected tab. Don't assume `getByText(title)` finds it without checking
+  tab visibility first (see any `create-request-*.spec.ts` for the pattern).
+- **Prefer looking up a just-created entity's id via a direct API call** (`findRequestIdByTitle` in
+  `helpers/requests.ts`: `GET /requests`, filter by the unique `[E2E] ... <timestamp>` title) over
+  racing the dashboard's tabbed UI for it. This matters more every month: with no cleanup endpoint
+  yet, E2E data accumulates run over run, and a loose URL-regex assertion like
+  `/\/client\/(dashboard|requests)/` can false-positive-match the *still-open* `/client/requests/new`
+  form (which contains the substring "requests" too) before any real navigation happened — require
+  a UUID segment (`requests\/[0-9a-fA-F-]{8,}`) instead.
+- **The direct-request provider picker selects by exact person name** ("Miguel Torres"), not trade
+  text ("Plomero") — its search input's placeholder ("Ej: Electricista, Plomero, Juan García...")
+  doesn't match a naive `/buscar|search/i` selector either, so a search-then-click flow can silently
+  never filter and click the wrong (first-in-list) provider instead. Skip the search box, click the
+  exact name directly. The admin reviews table has the same trap in reverse: it shows the provider
+  by **name**, not trade — `getByRole('row', { name: /plomero/i })` won't match a row showing
+  "Miguel Torres".
+- **`canBeReviewed()` requires `CLOSED`, not `FINISHED`** (specialist-be's `RequestEntity`) — after
+  a request reaches `FINISHED` there's one more client-side "Confirmar" step (moves it to `CLOSED`)
+  before the review UI appears at all.
+- **To simulate a WhatsApp reply, POST to the real webhook** (`POST /api/webhooks/twilio`, see
+  `helpers/whatsapp.ts`), never the dev-only `simulate-reply` admin endpoint — it only works under
+  `WHATSAPP_PROVIDER=local` and this suite needs to keep working regardless of that setting.
+
 ## Known gaps
 
 - **Cleanup endpoint doesn't exist yet.** `global-teardown.ts` calls
