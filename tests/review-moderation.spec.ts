@@ -1,39 +1,11 @@
-import { test, expect, request as pwRequest } from '@playwright/test';
+import { test, expect } from '@playwright/test';
 import path from 'path';
-import { e2eTitle, ADMIN_URL, FE_URL, API_URL, SEED_USERS } from './helpers/config';
+import { e2eTitle, ADMIN_URL, FE_URL } from './helpers/config';
 import { fastForwardRequestToFinished } from './helpers/fast-forward-request';
+import { findRequestIdByTitle } from './helpers/requests';
 
 const CLIENT_STATE = path.join(__dirname, '..', '.auth', 'client.json');
 const ADMIN_STATE = path.join(__dirname, '..', '.auth', 'admin.json');
-
-/**
- * Looks up the just-created request's id via the API instead of clicking through the
- * dashboard's tabbed UI to find it. With accumulated E2E data across runs (no cleanup endpoint
- * yet, see TODO.md) the dashboard can take longer to render/tab-switch than is worth racing
- * against in a test that isn't exercising that UI anyway — `GET /requests` (client's own,
- * newest first) is the stable source of truth for "did creation succeed, and what's its id".
- */
-async function findRequestIdByTitle(title: string): Promise<string> {
-  const ctx = await pwRequest.newContext();
-  try {
-    const loginRes = await ctx.post(`${API_URL}/auth/login`, { data: SEED_USERS.client });
-    if (!loginRes.ok()) {
-      throw new Error(`[review-moderation] client login failed (${loginRes.status()})`);
-    }
-    const { accessToken } = (await loginRes.json()) as { accessToken: string };
-    const listRes = await ctx.get(`${API_URL}/requests`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-    const list = (await listRes.json()) as Array<{ id: string; title: string }>;
-    const match = list.find((r) => r.title === title);
-    if (!match) {
-      throw new Error(`[review-moderation] request with title "${title}" not found via API`);
-    }
-    return match.id;
-  } finally {
-    await ctx.dispose();
-  }
-}
 
 /**
  * Crosses specialist-fe (create request, leave review) and specialist-admin
@@ -88,23 +60,35 @@ test('admin approves a pending review', async ({ browser }) => {
     // follow-up simulation, not a direct PATCH — see fast-forward-request.ts.
     await fastForwardRequestToFinished({ requestId });
 
-    // 3. Client leaves a review from the UI.
+    // 3. Client confirms completion (FINISHED -> CLOSED) -- canBeReviewed() requires CLOSED,
+    // not FINISHED (specialist-be/src/requests/CLAUDE.md), so this step is required before a
+    // review can be left. This is a direct FE control (client-side "Confirmar"), not the
+    // WhatsApp question_satisfaction ladder step -- that's a separate, equally valid path to the
+    // same transition, covered by whatsapp-followup.spec.ts instead.
     await clientPage.goto(`${FE_URL}/es/client/requests/${requestId}`);
-    await clientPage.getByRole('button', { name: /dejar rese[nñ]a|calificar|review/i }).click();
-    // Star rating widget — no stable selector confirmed; click the 5th star-like control.
-    await clientPage.getByRole('radio').last().click();
+    clientPage.once('dialog', (dialog) => dialog.accept());
+    await clientPage.getByRole('button', { name: 'Confirmar', exact: true }).click();
+
+    // 4. Client leaves a review from the UI.
+    await clientPage.getByRole('button', { name: /rese[nñ]a|calificaci|calificar|review/i }).click();
+    // Star rating widget: 5 unnamed plain <button>s (no role="radio"), scoped to the row right
+    // after the "Tu calificación" label so `.last()` can't accidentally grab "Enviar reseña".
+    const ratingRow = clientPage
+      .getByText('Tu calificación', { exact: false })
+      .locator('xpath=following-sibling::*[1]');
+    await ratingRow.getByRole('button').last().click();
     const commentBox = clientPage.getByRole('textbox').last();
     await commentBox.fill('Excelente trabajo, generado por la suite E2E.');
     await clientPage.getByRole('button', { name: /enviar|publicar|submit/i }).click();
 
-    // 4. Admin approves it in specialist-admin — separate context: a different
+    // 5. Admin approves it in specialist-admin — separate context: a different
     // origin needs its own storageState (admin_token), the client context's
     // storageState only covers specialist-fe's origin.
     const adminCtx = await browser.newContext({ storageState: ADMIN_STATE });
     const adminPage = await adminCtx.newPage();
     await adminPage.goto(`${ADMIN_URL}/admin/reviews`);
 
-    const row = adminPage.getByRole('row', { name: /plomero/i }).first();
+    const row = adminPage.getByRole('row', { name: /Miguel Torres/i }).first();
     await expect(row).toBeVisible({ timeout: 10_000 });
 
     adminPage.once('dialog', (dialog) => dialog.accept());
