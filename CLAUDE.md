@@ -46,15 +46,29 @@ Env vars (see `.env.example`): `E2E_API_URL`, `E2E_FE_URL`, `E2E_ADMIN_URL`,
 - `tests/global-teardown.ts` — calls the cleanup endpoint described below; see "Known gaps".
 - `tests/helpers/config.ts` — env var defaults, `SEED_USERS`, `e2eTitle()` (prefixes every
   request title this suite creates with `[E2E]` so the cleanup endpoint can find them).
-- `tests/helpers/fast-forward-request.ts` — drives a direct Request from SENT to FINISHED purely
-  via the API, for `review-moderation.spec.ts`'s setup step. Not a guess: verified against
-  `specialist-be/test/scripts/seed-data/generate-diverse-requests.ts`. Two things that aren't
-  obvious from the REST surface alone: (1) the **provider** (not the client) PATCHes status to
-  CONTACT_RELEASED; (2) CONTACT_RELEASED->IN_PROGRESS and IN_PROGRESS->FINISHED are each reachable
-  **only** through the WhatsApp follow-up simulation (`/admin/whatsapp/conversations/:id/
-  trigger-followup` + `simulate-reply`), never a direct PATCH.
-- `tests/*.spec.ts` — one file per flow: `auth`, `create-request-public`, `create-request-direct`,
-  `job-board-interest`, `review-moderation`.
+- `tests/helpers/requests.ts` — `findRequestIdByTitle` (looks up a just-created request's id via
+  `GET /requests` instead of racing the dashboard's tabbed UI) and `providerAcceptsRequest`
+  (the provider -- not the client -- PATCHes SENT -> CONTACT_RELEASED; the only status transition
+  reachable by a direct PATCH). Shared by `review-moderation.spec.ts` and
+  `whatsapp-followup.spec.ts`.
+- `tests/helpers/whatsapp.ts` -- `forceFollowUpViaApi`/`getThread` (thin wrappers over the always-
+  available `/admin/whatsapp/conversations/:id/*` endpoints -- `trigger-followup` works under any
+  `WHATSAPP_PROVIDER`), and `simulateWhatsAppReply`, which simulates a client/provider WhatsApp
+  reply by POSTing straight to the real webhook (`POST /api/webhooks/twilio`) instead of the
+  dev-only `simulate-reply` endpoint. Verified against `specialist-be`'s own inbound-processing
+  code that the webhook has **zero branch on `WHATSAPP_PROVIDER`** -- it's the same function
+  `simulate-reply` wraps -- so this works identically under `local` or `twilio`, *as long as the
+  outbound send that produced `twilioMessageSid`/`metadata.recipientPhone` actually succeeded*
+  (only a successful send stores those two fields; nothing can ever match a failed one). Never
+  assumes the `local-<uuid>` id format the local adapter happens to produce, so it stays correct
+  if this ever points at a real Twilio-configured environment.
+- `tests/helpers/fast-forward-request.ts` -- drives a direct Request from SENT to FINISHED purely
+  via the API, for `review-moderation.spec.ts`'s setup step. Sequence verified against
+  `specialist-be/test/scripts/seed-data/generate-diverse-requests.ts`. Built on top of
+  `helpers/whatsapp.ts` -- forces each follow-up rule via the API and replies via the real webhook
+  (see above), not the dev-only `simulate-reply`.
+- `tests/*.spec.ts` -- one file per flow: `auth`, `create-request-public`, `create-request-direct`,
+  `job-board-interest`, `review-moderation`, `whatsapp-followup`.
 
 ## Known gaps
 
@@ -63,13 +77,16 @@ Env vars (see `.env.example`): `E2E_API_URL`, `E2E_FE_URL`, `E2E_ADMIN_URL`,
   that dev-only endpoint is built there (see root `TODO.md`, Backend section), every run leaves
   its `[E2E]`-tagged Requests (and whatever cascades from them) in the DB. The teardown logs a
   clear warning rather than failing when it 404s.
-- **`review-moderation.spec.ts` requires `WHATSAPP_PROVIDER=local`** on the specialist-be
-  instance it's pointed at — `fast-forward-request.ts`'s WhatsApp follow-up simulation calls 404
-  when a real provider (Twilio) is configured instead (verified directly against a
-  `WHATSAPP_PROVIDER=twilio` dev instance during this repo's initial validation — that's a
-  legitimate, separate local dev configuration, e.g. for Twilio sandbox testing, not something
-  this suite should assume or change). The other four specs don't depend on this and were
-  verified green against a real running stack.
+- **`review-moderation.spec.ts` and `whatsapp-followup.spec.ts` need `WHATSAPP_PROVIDER=local`**
+  on the target specialist-be -- but *not* for the reply-simulation step (that POSTs to the real
+  `/api/webhooks/twilio`, which has zero branch on `WHATSAPP_PROVIDER`, see `helpers/whatsapp.ts`).
+  It's the **outbound** send `trigger-followup` triggers that needs it: under a real provider
+  (`twilio`) with no Twilio credentials configured (verified against exactly this dev instance),
+  `sendMessage` throws synchronously ("Twilio client is not initialized"), and a failed send never
+  stores `twilioMessageSid`/`recipientPhone` on the interaction -- so nothing downstream can ever
+  match a simulated reply to it. Even with real Twilio credentials configured, sending to the seed
+  users' fake phone numbers would still not be useful for an automated, repeatable test. All 8
+  specs were verified green together against a real running stack with `WHATSAPP_PROVIDER=local`.
 - **No `data-testid` convention** on the login, register, create-request, express-interest, or
   review-moderation forms in either specialist-fe or specialist-admin — specs select by `id`,
   visible text, or ARIA role instead. Fine for this suite's current size; worth reconsidering if

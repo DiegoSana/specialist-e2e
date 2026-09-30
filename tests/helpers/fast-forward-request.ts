@@ -1,5 +1,6 @@
 import { request as pwRequest } from '@playwright/test';
 import { API_URL, SEED_USERS } from './config';
+import { findSentInteraction, forceFollowUpViaApi, getThread, simulateWhatsAppReply, waitForRequestStatus } from './whatsapp';
 
 async function login(email: string, password: string): Promise<string> {
   const ctx = await pwRequest.newContext();
@@ -18,71 +19,26 @@ async function login(email: string, password: string): Promise<string> {
 }
 
 /**
- * simulate-reply publishes RequestInteractionRespondedEvent on the in-process EventBus, which
- * is fire-and-forget: the HTTP call returns before the handler finishes updating the request's
- * status. Poll instead of assuming the status already changed. Mirrors the identical helper in
- * specialist-be/test/scripts/seed-data/generate-diverse-requests.ts.
+ * Forces a follow-up rule and simulates the recipient's reply via the real Twilio webhook (not
+ * the dev-only `simulate-reply` endpoint — see tests/helpers/whatsapp.ts for why that matters:
+ * this works under any `WHATSAPP_PROVIDER`, as long as the outbound send itself succeeds).
  */
-async function waitForStatus(
-  adminToken: string,
-  requestId: string,
-  expectedStatus: string,
-  timeoutMs = 20_000,
-): Promise<void> {
-  const ctx = await pwRequest.newContext({
-    extraHTTPHeaders: { Authorization: `Bearer ${adminToken}` },
-  });
-  try {
-    const start = Date.now();
-    while (Date.now() - start < timeoutMs) {
-      const res = await ctx.get(`${API_URL}/requests/${requestId}`);
-      const body = (await res.json()) as { status: string };
-      if (body.status === expectedStatus) return;
-      await new Promise((resolve) => setTimeout(resolve, 300));
-    }
-  } finally {
-    await ctx.dispose();
+async function forceAndReply(requestId: string, ruleName: string, replyBody: string, expectedStatus: string) {
+  await forceFollowUpViaApi(requestId, ruleName);
+  const thread = await getThread(requestId);
+  const interaction = findSentInteraction(thread, ruleName);
+  if (!interaction || !interaction.twilioMessageSid || !interaction.metadata?.recipientPhone) {
+    throw new Error(
+      `[fast-forward] rule ${ruleName} on request ${requestId} produced no matchable SENT interaction ` +
+        `(twilioMessageSid/recipientPhone missing — the outbound send likely failed; check WHATSAPP_PROVIDER).`,
+    );
   }
-  throw new Error(`[fast-forward] timed out waiting for request ${requestId} to reach ${expectedStatus}`);
-}
-
-/** Drives CONTACT_RELEASED -> IN_PROGRESS via the WhatsApp admin dev tools (P1: "sí"). */
-async function simulateAgreement(adminToken: string, requestId: string): Promise<void> {
-  const ctx = await pwRequest.newContext({
-    extraHTTPHeaders: { Authorization: `Bearer ${adminToken}` },
+  await simulateWhatsAppReply({
+    messageSid: interaction.twilioMessageSid,
+    from: interaction.metadata.recipientPhone,
+    body: replyBody,
   });
-  try {
-    await ctx.post(`${API_URL}/admin/whatsapp/conversations/${requestId}/trigger-followup`, {
-      data: { ruleName: 'CONTACT_RELEASED_QUESTION_CLIENT_2D' },
-    });
-    await ctx.post(`${API_URL}/admin/whatsapp/conversations/${requestId}/simulate-reply`, {
-      data: { body: 'Sí, dale, dale para adelante' },
-    });
-  } finally {
-    await ctx.dispose();
-  }
-  await waitForStatus(adminToken, requestId, 'IN_PROGRESS');
-}
-
-/** Drives IN_PROGRESS -> FINISHED via the WhatsApp admin dev tools (P2: "terminé"). */
-async function simulateProgressDone(adminToken: string, requestId: string): Promise<void> {
-  const ctx = await pwRequest.newContext({
-    extraHTTPHeaders: { Authorization: `Bearer ${adminToken}` },
-  });
-  try {
-    await ctx.post(`${API_URL}/admin/whatsapp/conversations/${requestId}/trigger-followup`, {
-      data: { ruleName: 'IN_PROGRESS_QUESTION_7D' },
-    });
-    await ctx.post(`${API_URL}/admin/whatsapp/conversations/${requestId}/simulate-reply`, {
-      // Deliberately avoids "listo": DetectResponseIntentUseCase resolves CONFIRMED keywords
-      // before COMPLETED ones even though "listo" is in both lists, so a reply containing it
-      // would be a no-op here instead of finishing the request (see generate-diverse-requests.ts).
-      data: { body: 'Ya terminé el trabajo, quedó todo funcionando bien' },
-    });
-  } finally {
-    await ctx.dispose();
-  }
-  await waitForStatus(adminToken, requestId, 'FINISHED');
+  await waitForRequestStatus(requestId, expectedStatus);
 }
 
 /**
@@ -95,12 +51,14 @@ async function simulateProgressDone(adminToken: string, requestId: string): Prom
  * 1. The PROVIDER (not the client) accepts by PATCHing status to CONTACT_RELEASED directly —
  *    direct requests already have `providerId` set at creation, so no assign-provider call.
  * 2. CONTACT_RELEASED -> IN_PROGRESS and IN_PROGRESS -> FINISHED are each reachable ONLY through
- *    the WhatsApp follow-up simulation (trigger-followup + simulate-reply) — the backend's state
- *    machine does not accept a direct PATCH for either of those two transitions.
+ *    the WhatsApp follow-up simulation (force a rule + a reply that resolves to the right
+ *    intent) — the backend's state machine does not accept a direct PATCH for either transition.
  *
- * Requires specialist-be running with WHATSAPP_PROVIDER=local (the docker-compose.dev.yml
- * default) — the /admin/whatsapp/conversations/:id/* dev-tools endpoints this depends on 404/403
- * once a real WhatsApp provider (Twilio) is configured.
+ * Provider-agnostic: forcing the follow-up (`trigger-followup`) works with any
+ * `WHATSAPP_PROVIDER`, and so does simulating the reply (the webhook itself). The one thing that
+ * still needs `WHATSAPP_PROVIDER=local` to be side-effect-free is the outbound send triggered by
+ * `trigger-followup` not attempting a real Twilio call to a fake seed phone number — see
+ * specialist-e2e/CLAUDE.md "Known gaps".
  */
 export async function fastForwardRequestToFinished(params: { requestId: string }): Promise<void> {
   const { requestId } = params;
@@ -126,7 +84,19 @@ export async function fastForwardRequestToFinished(params: { requestId: string }
     await proCtx.dispose();
   }
 
-  const adminToken = await login(SEED_USERS.admin.email, SEED_USERS.admin.password);
-  await simulateAgreement(adminToken, requestId);
-  await simulateProgressDone(adminToken, requestId);
+  await forceAndReply(
+    requestId,
+    'CONTACT_RELEASED_QUESTION_CLIENT_2D',
+    'Sí, dale, dale para adelante',
+    'IN_PROGRESS',
+  );
+  await forceAndReply(
+    requestId,
+    'IN_PROGRESS_QUESTION_7D',
+    // Deliberately avoids "listo": DetectResponseIntentUseCase resolves CONFIRMED keywords
+    // before COMPLETED ones even though "listo" is in both lists, so a reply containing it
+    // would be a no-op here instead of finishing the request (see generate-diverse-requests.ts).
+    'Ya terminé el trabajo, quedó todo funcionando bien',
+    'FINISHED',
+  );
 }

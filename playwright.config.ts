@@ -33,7 +33,7 @@ export default defineConfig({
     },
     {
       name: 'admin',
-      testMatch: /review-moderation\.spec\.ts/,
+      testMatch: /(review-moderation|whatsapp-followup)\.spec\.ts/,
       use: {
         ...devices['Desktop Chrome'],
         baseURL: process.env.E2E_ADMIN_URL || 'http://localhost:3000',
