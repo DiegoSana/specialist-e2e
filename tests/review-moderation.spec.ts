@@ -14,6 +14,19 @@ const ADMIN_STATE = path.join(__dirname, '..', '.auth', 'admin.json');
  * E2E_FE_URL explicitly, since the admin project's baseURL is specialist-admin's
  * origin.
  *
+ * Deliberately kept small: a single-direction (client-to-professional) smoke test of the
+ * moderation happy path, predating the 2026-09-30 bidirectional reviews redesign
+ * (REVIEWS_REDESIGN.md) but still valid under it -- CLIENT_TO_PROVIDER review creation and
+ * moderation didn't change shape. For the full bidirectional flow (both directions, the
+ * doble-ciego reveal gate, the "Dirección" column, the "Destacar" toggle), see
+ * review-bidirectional.spec.ts instead.
+ *
+ * The admin row lookup below matches by provider name alone (`/Miguel Torres/i`), which is only
+ * safe because this spec creates exactly one review for this request. review-bidirectional.spec.ts
+ * creates two (one per direction) on the same request, where "Miguel Torres" appears as both
+ * Provider (CLIENT_TO_PROVIDER row) and Reviewer (PROVIDER_TO_CLIENT row) -- see that file's doc
+ * comment for why it scopes by comment text instead.
+ *
  * Depends on the cleanup endpoint (specialist-be plan section 2, not built yet as
  * of this scaffold commit) to avoid leaving FINISHED requests + approved reviews
  * behind on every run — see global-teardown.ts.
