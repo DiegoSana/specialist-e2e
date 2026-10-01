@@ -25,7 +25,8 @@ export default defineConfig({
   projects: [
     {
       name: 'fe',
-      testMatch: /(auth|create-request-public|create-request-direct|job-board-interest)\.spec\.ts/,
+      testMatch:
+        /(auth|create-request-public|create-request-direct|job-board-interest|password-reset)\.spec\.ts/,
       use: {
         ...devices['Desktop Chrome'],
         baseURL: process.env.E2E_FE_URL || 'http://localhost:3001',
