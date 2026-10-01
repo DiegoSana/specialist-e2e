@@ -18,7 +18,11 @@ npm --prefix ../specialist-admin run dev                           # :3000
 The suite assumes `specialist-be/prisma/seed.ts` has already run (`npm run db:seed` there) — it
 authenticates as the fixed seed accounts (`cliente1@test.com`, `plomero@test.com`,
 `admin@specialist.com`, all password `Test1234!`) rather than registering new users, so it never
-needs to touch the `User` table itself.
+needs to touch the `User` table itself. **One documented exception**: `password-reset.spec.ts`
+registers a single disposable, timestamped throwaway user via the UI instead of reusing a seed
+account — resetting a seed account's password would break every later spec in the same serial run
+(`workers: 1`) that logs in as that account expecting its original password. It never touches a
+seed account's password.
 
 ```bash
 npm install
@@ -139,10 +143,14 @@ time; skip that round next time.
   `specialist-fe`/`specialist-admin` (three separate private repos) from `specialist-e2e`'s own
   Actions run needs a Personal Access Token with access to all of them, which doesn't exist yet.
   Tracked in root `TODO.md`.
-- Registration (a brand-new user, not a seed account) isn't covered — the suite deliberately
-  reuses fixed seed accounts so the cleanup story stays simple (no `User` rows to clean up). A
-  future registration spec would need to extend the cleanup endpoint to also filter by an email
-  prefix.
+- Registration (a brand-new user, not a seed account) is only covered incidentally, as a setup
+  step inside `password-reset.spec.ts` (see "Running" above for why that spec is a documented
+  exception to the seed-accounts-only rule) — there's no standalone registration spec, and the
+  suite still otherwise deliberately reuses fixed seed accounts so the cleanup story stays simple
+  (no `User` rows to clean up for the rest of the suite). The disposable users
+  `password-reset.spec.ts` creates are **not** cleaned up by the existing cleanup endpoint (it
+  only filters by Request title prefix, not by email) — extending it to also filter by an email
+  prefix would be needed to actually delete them.
 - **Bidirectional reviews: two gaps deliberately left uncovered** by `review-bidirectional.spec.ts`
   (both out of scope per REVIEWS_REDESIGN.md's own "fuera de alcance" section, not forgotten):
   - The 14-day reveal timeout (`RevealReviewsJob`, `REVIEW_REVEAL_TIMEOUT_DAYS`) — not testable in

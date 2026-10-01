@@ -1,6 +1,9 @@
 export const API_URL = process.env.E2E_API_URL || 'http://localhost:5000/api';
 export const FE_URL = process.env.E2E_FE_URL || 'http://localhost:3001';
 export const ADMIN_URL = process.env.E2E_ADMIN_URL || 'http://localhost:3000';
+// Mailpit (local dev email catcher, see specialist-be/docker-compose.dev.yml) — only
+// needed by password-reset.spec.ts.
+export const MAILPIT_URL = process.env.E2E_MAILPIT_URL || 'http://localhost:8025';
 export const CLEANUP_ENDPOINT =
   process.env.E2E_CLEANUP_ENDPOINT || 'http://localhost:5000/api/requests/test-utils/e2e-data';
 export const TITLE_PREFIX = process.env.E2E_TITLE_PREFIX || '[E2E]';
