@@ -25,7 +25,7 @@ npm install
 npx playwright install chromium   # first time only
 npm test              # everything
 npm run test:fe       # specialist-fe specs only
-npm run test:admin    # review-moderation.spec.ts (crosses into specialist-admin)
+npm run test:admin    # review-moderation, review-bidirectional, whatsapp-followup (cross into specialist-admin)
 npm run typecheck
 ```
 
@@ -35,9 +35,10 @@ Env vars (see `.env.example`): `E2E_API_URL`, `E2E_FE_URL`, `E2E_ADMIN_URL`,
 ## Layout
 
 - `playwright.config.ts` — two `projects`: `fe` (baseURL `:3001`) and `admin` (baseURL `:3000`,
-  only `review-moderation.spec.ts`, which reaches specialist-fe via absolute URLs for its setup
-  steps instead of juggling two baseURLs in one file). `workers: 1` — specs share the small,
-  fixed set of seed accounts, so serial execution avoids data races between them.
+  `review-moderation.spec.ts` + `review-bidirectional.spec.ts` + `whatsapp-followup.spec.ts`,
+  which reach specialist-fe via absolute URLs for their setup steps instead of juggling two
+  baseURLs in one file). `workers: 1` — specs share the small, fixed set of seed accounts, so
+  serial execution avoids data races between them.
 - `tests/global-setup.ts` — logs in the fixed seed accounts via the real `/auth/login` API (no
   OAuth, no UI) and writes one Playwright `storageState` file per role under `.auth/` (gitignored):
   `client.json`/`professional.json` (specialist-fe, localStorage keys `token`/`user`) and
@@ -68,7 +69,12 @@ Env vars (see `.env.example`): `E2E_API_URL`, `E2E_FE_URL`, `E2E_ADMIN_URL`,
   `helpers/whatsapp.ts` -- forces each follow-up rule via the API and replies via the real webhook
   (see above), not the dev-only `simulate-reply`.
 - `tests/*.spec.ts` -- one file per flow: `auth`, `create-request-public`, `create-request-direct`,
-  `job-board-interest`, `review-moderation`, `whatsapp-followup`.
+  `job-board-interest`, `review-moderation`, `review-bidirectional`, `whatsapp-followup`.
+  `review-moderation.spec.ts` is a small single-direction (client-to-professional) moderation
+  smoke test predating the 2026-09-30 bidirectional reviews redesign; `review-bidirectional.spec.ts`
+  covers the full redesign (both directions on one request, the doble-ciego reveal gate that only
+  fires once both sides are APPROVED, the admin "Dirección" column, the "Destacar" toggle) — see
+  that file's doc comment and `/var/www/specialist/REVIEWS_REDESIGN.md`.
 
 ## Writing a new spec — real gotchas, not guesses
 
@@ -137,3 +143,14 @@ time; skip that round next time.
   reuses fixed seed accounts so the cleanup story stays simple (no `User` rows to clean up). A
   future registration spec would need to extend the cleanup endpoint to also filter by an email
   prefix.
+- **Bidirectional reviews: two gaps deliberately left uncovered** by `review-bidirectional.spec.ts`
+  (both out of scope per REVIEWS_REDESIGN.md's own "fuera de alcance" section, not forgotten):
+  - The 14-day reveal timeout (`RevealReviewsJob`, `REVIEW_REVEAL_TIMEOUT_DAYS`) — not testable in
+    E2E without manipulating wall-clock time or faking `createdAt`; the spec only exercises the
+    "both APPROVED" synchronous reveal path (`ReviewService.approve`'s immediate-reveal branch).
+  - Reviews of a `Company` provider (vs. `Professional`) — the fixed seed accounts
+    (`SEED_USERS`/`prisma/seed.ts`) don't include a company account easy to drive through a full
+    request lifecycle without adding new seed data, which the suite's seed-accounts-only convention
+    rules out. The `provider-detail-modal.tsx` fix that makes reviews visible for `Company`
+    providers (REVIEWS_REDESIGN.md 4.3) is exercised only by specialist-fe's own unit/component
+    tests, not here.
