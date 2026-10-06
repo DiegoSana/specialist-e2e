@@ -34,7 +34,8 @@ npm run typecheck
 ```
 
 Env vars (see `.env.example`): `E2E_API_URL`, `E2E_FE_URL`, `E2E_ADMIN_URL`,
-`E2E_CLEANUP_ENDPOINT`, `E2E_TITLE_PREFIX`.
+`E2E_CLEANUP_ENDPOINT`, `E2E_TITLE_PREFIX`, `E2E_SKIP_CLEANUP` (`1`/`true` = el teardown no
+borra la data del run, útil para inspeccionarla desde el admin).
 
 ## Layout
 
