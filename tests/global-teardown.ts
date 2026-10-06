@@ -16,6 +16,13 @@ import { CLEANUP_ENDPOINT, TITLE_PREFIX } from './helpers/config';
  * no changes needed here.
  */
 export default async function globalTeardown() {
+  // Opt-out for when you want to inspect the data a run left behind (e.g. from the admin panel).
+  const skipCleanup = ['1', 'true'].includes((process.env.E2E_SKIP_CLEANUP ?? '').toLowerCase());
+  if (skipCleanup) {
+    console.log('[global-teardown] E2E_SKIP_CLEANUP is set; leaving this run\'s data in the DB.');
+    return;
+  }
+
   const tokenPath = path.join(__dirname, '..', '.auth', 'admin-token.txt');
   let adminToken: string | undefined;
   try {
